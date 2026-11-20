@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+
+# 本机运行时产物（含心情、配置、日志）
+*.log
+diag.log
+config.json
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 临时脚本
+_recall_test.mjs
+probe_*.cjs

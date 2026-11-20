@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Cyber Room",
+    "description": "Your own room in the sidebar: a character whose mood really changes how the agent talks, a cost ledger priced by the actual model, quick notes, todos, local memory search, a daily report and a nightly memory digest.",
+    "detail": "docs/DETAIL.md"
+  }
+}

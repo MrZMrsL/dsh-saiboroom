@@ -1,0 +1,55 @@
+{
+  "name": "dsh-saiboroom",
+  "version": "1.0.0",
+  "description": "赛博房间 —— 给 DeepSeek Harness 的侧栏面板：会变心情的角色、饭量账本、随录、待办、记忆检索、每晚沉淀",
+  "type": "module",
+  "license": "MIT",
+  "author": "MrZMrsL",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MrZMrsL/dsh-saiboroom.git"
+  },
+  "homepage": "https://github.com/MrZMrsL/dsh-saiboroom#readme",
+  "bugs": {
+    "url": "https://github.com/MrZMrsL/dsh-saiboroom/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dashboard",
+    "mood",
+    "cost"
+  ],
+  "scripts": {
+    "build": "node build.cjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.png"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "build.cjs",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.png",
+    "assets"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
