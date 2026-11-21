@@ -1,6 +1,6 @@
 {
   "name": "dsh-saiboroom",
-  "version": "1.0.0",
+  "version": "0.29.0",
   "description": "赛博房间 —— 给 DeepSeek Harness 的侧栏面板：会变心情的角色、饭量账本、随录、待办、记忆检索、每晚沉淀",
   "type": "module",
   "license": "MIT",

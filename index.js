@@ -1036,6 +1036,123 @@ function toggleDtodo(file, index, done) {
 }
 
 // ── 随录条目处置：记住 / 转待办 / 舍弃 ──────────────────────────────
+// ── 随录与待办：可编辑 + 最近的终态归档 ──────────────────────────────
+const ARCHIVE_RE = /^(已采纳|已转待办|舍弃)/
+function ideaFilePath(cfg) {
+  return join(cfg.workspace, '笔记', '30-想法池.md')
+}
+
+// 只看最近的终态条目：已采纳 / 已转待办 / 舍弃。超过 days 天不再展示（文件里仍留着，可检索）
+function readArchive(cfg, days, max) {
+  const D = Number.isFinite(days) ? days : 30
+  const M = Number.isFinite(max) ? max : 5
+  if (!cfg || !cfg.workspace) return []
+  let txt = ''
+  try { txt = readFileSync(ideaFilePath(cfg), 'utf8') } catch { return [] }
+  const now = Date.now()
+  const out = []
+  let cur = null
+  const flush = () => {
+    if (!cur) { return }
+    if (ARCHIVE_RE.test(cur.status)) {
+      const t = cur.at ? Date.parse(cur.at + 'T12:00:00') : 0
+      if (!t || now - t <= D * 86400000) {
+        out.push({ seq: cur.seq, title: cur.title, text: cur.text || cur.title, status: cur.status, at: cur.at })
+      }
+    }
+    cur = null
+  }
+  for (const line of txt.split(/\r?\n/)) {
+    const t = line.trim()
+    const hd = t.match(/^###\s*(.+)$/)
+    if (hd) {
+      flush()
+      const hm = hd[1].match(/^(?:A|I)?(\d+)\s*[·.\-]\s*(.+)$/)
+      cur = {
+        seq: hm ? Number(hm[1]) : 0,
+        title: (hm ? hm[2] : hd[1]).replace(/\s+/g, ' ').replace(/[（(]想法[）)]\s*$/, '').slice(0, 48),
+        status: '', at: '', text: '',
+      }
+      continue
+    }
+    if (!cur) continue
+    if (/^[-*]\s*\*\*状态\*\*/.test(t)) {
+      cur.status = t.replace(/^[-*]\s*\*\*状态\*\*[:：]\s*/, '').trim()
+      const md = cur.status.match(/(\d{4}-\d{2}-\d{2})/)
+      if (md) cur.at = md[1]
+      continue
+    }
+    if (/^[-*]\s+/.test(t) && !cur.text) {
+      cur.text = t.replace(/^[-*]\s+/, '').replace(/^\*\*(?:想法|结论|内容|点子|原话|价值|风险|做法)\*\*[:：]\s*/, '').slice(0, 140)
+    }
+  }
+  flush()
+  return out.sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, M)
+}
+
+function mutateIdeaBlock(cfg, seq, fn) {
+  const n = Number(String(seq == null ? '' : seq).replace(/^[AI]\s*/i, ''))
+  if (!Number.isInteger(n) || n <= 0) return { ok: false, error: '序号不对' }
+  const p = ideaFilePath(cfg)
+  let txt = ''
+  try { txt = readFileSync(p, 'utf8') } catch { return { ok: false, error: '读不到想法池' } }
+  const lines = txt.split(/\r?\n/)
+  let start = -1
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^###\s*(?:A|I)?(\d+)\s*[·.\-]/)
+    if (m && Number(m[1]) === n) { start = i; break }
+  }
+  if (start < 0) return { ok: false, error: '没找到 A' + n }
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^###\s/.test(lines[i])) { end = i; break }
+  }
+  const r = fn(lines, start, end)
+  if (!r || !r.ok) return r || { ok: false, error: '没改成' }
+  writeFileSync(p, lines.join('\n'))
+  diag('随录改：A' + n)
+  return { ok: true, seq: n, ideas: readIdeas(cfg) }
+}
+
+function editIdea(cfg, seq, text) {
+  const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
+  if (!t) return { ok: false, error: '内容不能为空' }
+  const cut = [...t].slice(0, 140).join('')
+  return mutateIdeaBlock(cfg, seq, (lines, start, end) => {
+    for (let i = start + 1; i < end; i++) {
+      if (/^[-*]\s+/.test(lines[i]) && !/^\s*[-*]\s*\*\*状态\*\*/.test(lines[i])) {
+        lines[i] = '- ' + cut
+        return { ok: true }
+      }
+    }
+    lines.splice(start + 2, 0, '- ' + cut)
+    return { ok: true }
+  })
+}
+
+function editTodo(cfg, file, line, text) {
+  if (!cfg || !cfg.workspace) return { ok: false, error: '没有工作区' }
+  const t = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
+  if (!t) return { ok: false, error: '内容不能为空' }
+  const rootDir = join(cfg.workspace, '笔记')
+  const abs = resolve(String(file || ''))
+  if (!(abs === rootDir || abs.startsWith(rootDir + sep)) || !/\.md$/i.test(abs)) {
+    return { ok: false, error: '只改笔记目录里的 md' }
+  }
+  const idx = Number(line)
+  let txt = ''
+  try { txt = readFileSync(abs, 'utf8') } catch { return { ok: false, error: '读不到这个文件' } }
+  const lines = txt.split(/\r?\n/)
+  if (!Number.isInteger(idx) || idx < 0 || idx >= lines.length) return { ok: false, error: '行号越界' }
+  const old = lines[idx]
+  if (!/^[-*]\s*\[[ xX✓]\]/.test(old.trim())) return { ok: false, error: '这行不是待办' }
+  const cut = [...t].slice(0, 160).join('')
+  lines[idx] = old.replace(/(\[[ xX✓]\]\s*)(.*)$/, (m0, box) => box + cut)
+  writeFileSync(abs, lines.join('\n'))
+  diag('待办改名：' + basename(abs) + ':' + idx)
+  return { ok: true, todos: readTodos(cfg) }
+}
+
 function decideIdea(cfg, seq, action) {
   if (!cfg || !cfg.workspace) return { ok: false, error: '没有工作区' }
   const n = Number(String(seq == null ? '' : seq).replace(/^[AI]\s*/i, ''))
@@ -2118,7 +2235,8 @@ export function apply(ctx) {
             budget: budgetOf(cfg, tok.money),
             todos: readTodos(cfg),
             notes: readNotes(cfg),
-            ideas: readIdeas(cfg),
+            ideas: readIdeas(cfg).filter((x) => !x.status || /想法|讨论中/.test(x.status)),
+            archive: readArchive(cfg),
       ideasToday: ideasTodayCount(cfg),
             dream: readDream(),
             recallDocs: recallDocs(cfg).length,
@@ -2296,7 +2414,38 @@ export function apply(ctx) {
 
   // 5) 待办就地打勾（界面上的小方框 POST 过来）
   try {
-    ctx.effect(() => ctx.webServer.register({
+        ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: '/dsh-room/todo/edit',
+      handler: async (req, res) => {
+        if (!allowed(req, res)) return
+        const send = (code, obj) => {
+          try {
+            res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+            res.end(JSON.stringify(obj))
+          } catch (e) { diag('回复失败：' + (e && e.message)) }
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: '只收 POST' })
+        const chunks = []
+        let size = 0
+        try {
+          for await (const c of req) {
+            chunks.push(c)
+            size += c.length
+            if (size > 8192) { send(413, { ok: false, error: '太大了' }); req.destroy(); return }
+          }
+        } catch (e) { return send(400, { ok: false, error: '读不到请求体' }) }
+        let j = null
+        try { j = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch (e) {
+          return send(400, { ok: false, error: '不是合法 JSON' })
+        }
+        const r = editTodo(readConfig(), j && j.file, j && j.line, j && j.text)
+        if (r.ok) stateCache.at = 0
+        send(r.ok ? 200 : 400, r)
+      },
+    }))
+
+ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
       path: '/dsh-room/todo',
       handler: (req, res) => {
@@ -2451,7 +2600,38 @@ export function apply(ctx) {
 
   // 随录条目处置（记住 / 转待办 / 舍弃）
   try {
-    ctx.effect(() => ctx.webServer.register({
+        ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: '/dsh-room/idea/edit',
+      handler: async (req, res) => {
+        if (!allowed(req, res)) return
+        const send = (code, obj) => {
+          try {
+            res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+            res.end(JSON.stringify(obj))
+          } catch (e) { diag('回复失败：' + (e && e.message)) }
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: '只收 POST' })
+        const chunks = []
+        let size = 0
+        try {
+          for await (const c of req) {
+            chunks.push(c)
+            size += c.length
+            if (size > 8192) { send(413, { ok: false, error: '太大了' }); req.destroy(); return }
+          }
+        } catch (e) { return send(400, { ok: false, error: '读不到请求体' }) }
+        let j = null
+        try { j = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch (e) {
+          return send(400, { ok: false, error: '不是合法 JSON' })
+        }
+        const r = editIdea(readConfig(), j && j.seq, j && j.text)
+        if (r.ok) stateCache.at = 0
+        send(r.ok ? 200 : 400, r)
+      },
+    }))
+
+ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
       path: '/dsh-room/idea/decide',
       handler: (req, res) => {

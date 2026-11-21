@@ -711,6 +711,29 @@ window.__ModuleLoader__.load({
       // 待办就地打勾：只对「有 file/line 且 editable」的条目开按钮（dtodo 的条目只读）
       const shownTodos = todoOv || todos;
 
+      const [editIdeaSeq, setEditIdeaSeq] = useState(0);
+      const [editTodoKey, setEditTodoKey] = useState('');
+      function saveIdeaEdit(seq, text) {
+        const t = String(text || '').trim();
+        if (!t) { setIdeaMsg('内容空着，没存'); return; }
+        fetch('/dsh-room/idea/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ seq: seq, text: t }) })
+          .then((r) => r.json())
+          .then((j) => {
+            if (j && j.ok) { setIdeaOv(j.ideas || []); setIdeaMsg('A' + j.seq + ' 改好了'); setEditIdeaSeq(0); }
+            else { setIdeaMsg('没改成：' + ((j && j.error) || '服务端拒了')); }
+          })
+          .catch(() => setIdeaMsg('没改成：网络断了'));
+      }
+      function saveTodoEdit(it, text) {
+        const t = String(text || '').trim();
+        if (!t) { setTodoOv(null); setEditTodoKey(''); return; }
+        fetch('/dsh-room/todo/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ file: it.file, line: it.line, text: t }) })
+          .then((r) => r.json())
+          .then((j) => {
+            if (j && j.ok) { setTodoOv(j.todos || null); setEditTodoKey(''); }
+          })
+          .catch(() => {});
+      }
       function toggleTodo(it) {
         if (!it || !it.file || todoBusy) return;
         if (!it.editable && it.kind !== 'dtodo') return;
@@ -1060,7 +1083,13 @@ window.__ModuleLoader__.load({
                   title: it.editable ? (it.done ? '点一下标回未完成' : '点一下标为完成') : '来自 dtodo，去记忆 Tab 改',
                   onClick: () => toggleTodo(it),
                 }, it.done ? '✓' : ''),
-                h('span', { className: 'dshrm-todotext' }, it.text),
+                editTodoKey === (it.file + ':' + it.line)
+                  ? h('input', { className: 'dshrm-nameinput small', defaultValue: it.text, autoFocus: true,
+                      onKeyDown: (e) => { if (e.key === 'Enter') saveTodoEdit(it, e.target.value); if (e.key === 'Escape') setEditTodoKey(''); } })
+                  : h('span', { className: 'dshrm-todotext' }, it.text),
+                it.src === 'note' && editTodoKey !== (it.file + ':' + it.line)
+                  ? h('button', { className: 'dshrm-mini', title: '改这条待办的文字', onClick: () => setEditTodoKey(it.file + ':' + it.line) }, '改')
+                  : null,
                 it.src ? h('span', { className: 'dshrm-src' }, it.src) : null)))
             : h('p', { className: 'dshrm-empty' }, '待办是空的。真干净，还是没记？'),
           shownTodos && shownTodos.bySrc
@@ -1105,12 +1134,16 @@ window.__ModuleLoader__.load({
                 const pending = !d.status || /想法|讨论中/.test(d.status)
                 return h('div', { className: 'dshrm-item', key: i },
                   h('span', { className: 'n' }, String(i + 1).padStart(2, '0')),
-                  h('span', { className: 'dshrm-ideatext' }, d.text || d.title),
+                  editIdeaSeq === d.seq
+                    ? h('input', { className: 'dshrm-nameinput small', defaultValue: d.text || d.title, autoFocus: true,
+                        onKeyDown: (e) => { if (e.key === 'Enter') saveIdeaEdit(d.seq, e.target.value); if (e.key === 'Escape') setEditIdeaSeq(0); } })
+                    : h('span', { className: 'dshrm-ideatext', title: '点右边「改」可以改写' }, d.text || d.title),
                   d.today ? h('span', { className: 'dshrm-flag' }, '今天') : null,
                   !d.today && d.at ? h('span', { className: 'dshrm-flag' }, d.at.slice(5)) : null,
                   !pending && d.status ? h('span', { className: 'dshrm-flag done' }, d.status) : null,
                   pending
                     ? h('span', { className: 'dshrm-ideaact' },
+                        h('button', { className: 'dshrm-mini', title: '改这一条的文字', onClick: () => setEditIdeaSeq(d.seq) }, '改'),
                         h('button', { className: 'dshrm-mini', disabled: !!ideaBusy, title: '记为要记住的，进记忆待确认', onClick: () => decideIdea(d, 'keep') }, '记住'),
                         h('button', { className: 'dshrm-mini', disabled: !!ideaBusy, title: '转成一条待办', onClick: () => decideIdea(d, 'todo') }, '待办'),
                         h('button', { className: 'dshrm-mini danger', disabled: !!ideaBusy, title: '舍弃，不再显示操作按钮', onClick: () => decideIdea(d, 'drop') }, '舍弃'))
@@ -1128,9 +1161,25 @@ window.__ModuleLoader__.load({
             }),
             h('button', { className: 'dshrm-pen', onClick: saveIdea }, ideaBusy ? '存着…' : '记下')),
           ideaMsg ? h('p', { className: 'dshrm-hint tip' }, ideaMsg) : null,
-          h('p', { className: 'dshrm-note' }, '在这儿写，或者在微信里直接跟我说「记一下：…」，都会落进 笔记/30-想法池.md，下次进面板就在上面。')),
+          h('p', { className: 'dshrm-note' }, '点了「待办」就搬进待办卡，不在这儿堆着；点「改」能改字。写的和微信里说的都落进 笔记/30-想法池.md。')),
 
-        h(Card, { title: '记忆检索', sub: '从笔记和记忆里翻旧账 · 本机索引', tone: 'magenta' },
+                h(Card, {
+          id: 'archive',
+          title: '最近处理过',
+          sub: '已采纳 / 已转待办 / 已舍弃',
+          tone: 'violet',
+          summary: (st && Array.isArray(st.archive) && st.archive.length) ? st.archive.length + ' 条' : '暂时没有',
+        },
+          st && Array.isArray(st.archive) && st.archive.length
+            ? h('div', null, st.archive.map((a, i) => h('div', { className: 'dshrm-item', key: i },
+                h('span', { className: 'n' }, 'A' + a.seq),
+                h('span', { className: 'dshrm-ideatext' }, a.text || a.title),
+                h('span', { className: 'dshrm-flag done' }, String(a.status).replace(/[（(].*$/, '')),
+                a.at ? h('span', { className: 'dshrm-flag' }, a.at.slice(5)) : null)))
+            : h('p', { className: 'dshrm-empty' }, '还没有处理过的条目。'),
+          h('p', { className: 'dshrm-note' }, '只留最近 30 天的 5 条。更早的没删，还在 30-想法池.md 里，用下面的记忆检索翻。')),
+
+h(Card, { title: '记忆检索', sub: '从笔记和记忆里翻旧账 · 本机索引', tone: 'magenta' },
           h('div', { className: 'dshrm-search' },
             h('input', {
               className: 'dshrm-nameinput',
