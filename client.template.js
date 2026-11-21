@@ -664,6 +664,7 @@ window.__ModuleLoader__.load({
       const [ideaBusy, setIdeaBusy] = useState(false);
       const [ideaMsg, setIdeaMsg] = useState('');
       const [ideaOv, setIdeaOv] = useState(null);
+      const [archOv, setArchOv] = useState(null);
       const [budDraft, setBudDraft] = useState('');
       const [budBusy, setBudBusy] = useState(false);
       const name = (st && st.panelName) || PANEL_NAME;
@@ -674,6 +675,7 @@ window.__ModuleLoader__.load({
       const todos = (st && st.todos) || null;
       const notes = Array.isArray(st && st.notes) ? st.notes : null;
       const ideas = Array.isArray(st && st.ideas) ? st.ideas : null;
+      const archList = archOv || (st && Array.isArray(st.archive) ? st.archive : null);
       const bud = (st && st.budget) || null;
       const budVal = bud && Number(bud.amount) > 0 ? bud : null;
 
@@ -815,6 +817,27 @@ window.__ModuleLoader__.load({
             } else setIdeaMsg((x.j && x.j.error) || '没改上');
           })
           .catch((e) => setIdeaMsg('没改上：' + String((e && e.message) || e)))
+          .then(() => setIdeaBusy(false), () => setIdeaBusy(false));
+      }
+
+      function restoreIdeaItem(a) {
+        if (!a || !a.seq || ideaBusy) return;
+        setIdeaBusy(true);
+        setIdeaMsg('');
+        fetch('/dsh-room/idea/restore', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ seq: a.seq }),
+        })
+          .then((r) => r.json().then((j) => ({ code: r.status, j: j })))
+          .then((x) => {
+            if (x.j && x.j.ok) {
+              setIdeaMsg('A' + a.seq + ' 放回随录了，可以重新决定');
+              if (Array.isArray(x.j.ideas)) setIdeaOv(x.j.ideas);
+              if (Array.isArray(x.j.archive)) setArchOv(x.j.archive);
+            } else setIdeaMsg((x.j && x.j.error) || '没恢复上');
+          })
+          .catch((e) => setIdeaMsg('没恢复上：' + String((e && e.message) || e)))
           .then(() => setIdeaBusy(false), () => setIdeaBusy(false));
       }
 
@@ -1168,16 +1191,22 @@ window.__ModuleLoader__.load({
           title: '最近处理过',
           sub: '已采纳 / 已转待办 / 已舍弃',
           tone: 'violet',
-          summary: (st && Array.isArray(st.archive) && st.archive.length) ? st.archive.length + ' 条' : '暂时没有',
+          summary: archList && archList.length ? archList.length + ' 条' : '暂时没有',
         },
-          st && Array.isArray(st.archive) && st.archive.length
-            ? h('div', null, st.archive.map((a, i) => h('div', { className: 'dshrm-item', key: i },
+          archList && archList.length
+            ? h('div', null, archList.map((a, i) => h('div', { className: 'dshrm-item', key: i },
                 h('span', { className: 'n' }, 'A' + a.seq),
                 h('span', { className: 'dshrm-ideatext' }, a.text || a.title),
                 h('span', { className: 'dshrm-flag done' }, String(a.status).replace(/[（(].*$/, '')),
-                a.at ? h('span', { className: 'dshrm-flag' }, a.at.slice(5)) : null)))
+                a.at ? h('span', { className: 'dshrm-flag' }, a.at.slice(5)) : null,
+                /^舍弃/.test(String(a.status || ''))
+                  ? h('button', {
+                      className: 'dshrm-mini', disabled: !!ideaBusy, title: '放回随录，再决定一次',
+                      onClick: () => restoreIdeaItem(a),
+                    }, '恢复')
+                  : null)))
             : h('p', { className: 'dshrm-empty' }, '还没有处理过的条目。'),
-          h('p', { className: 'dshrm-note' }, '只留最近 30 天的 5 条。更早的没删，还在 30-想法池.md 里，用下面的记忆检索翻。')),
+          h('p', { className: 'dshrm-note' }, '只留最近 30 天的 5 条；「舍弃」的点一下就放回随录，能重新决定。更早的没删，还在 30-想法池.md 里，用下面的记忆检索翻。')),
 
 h(Card, { title: '记忆检索', sub: '从笔记和记忆里翻旧账 · 本机索引', tone: 'magenta' },
           h('div', { className: 'dshrm-search' },

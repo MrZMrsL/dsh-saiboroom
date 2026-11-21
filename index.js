@@ -1208,6 +1208,33 @@ function decideIdea(cfg, seq, action) {
   return { ok: true, seq: n, action: act, ideas: readIdeas(cfg) }
 }
 
+// 恢复：只对「舍弃」的开放。改回「想法（date 恢复）」后，随录里会重新出现，
+// 归档里自然消失（ARCHIVE_RE 不再匹配它的状态）。已转待办/已采纳不在这儿恢复——
+// 它们各自有更该去的地方，硬改回来会出现同一件事两处都在的情况。
+function restoreIdea(cfg, seq) {
+  if (!cfg || !cfg.workspace) return { ok: false, error: '没有工作区' }
+  const out = mutateIdeaBlock(cfg, seq, (lines, start, end) => {
+    let sl = -1
+    for (let i = start + 1; i < end; i++) { if (/^\s*-\s*\*\*状态\*\*/.test(lines[i])) { sl = i; break } }
+    const cur = sl >= 0 ? String(lines[sl]).replace(/^\s*-\s*\*\*状态\*\*[:：]\s*/, '').trim() : ''
+    if (!cur) return { ok: false, error: '这条没有状态，本来就在随录里' }
+    if (/^已转待办/.test(cur)) return { ok: false, error: '这条已经转成待办了，去待办卡里把它取消就能退回随录' }
+    if (/^已采纳/.test(cur)) return { ok: false, error: '这条已经进了记忆待确认队列，去记忆 Tab 里撤更稳妥' }
+    if (!/^舍弃/.test(cur)) return { ok: false, error: '只有「舍弃」的能恢复' }
+    lines[sl] = '- **状态**：想法（' + localDateStr(Date.now()) + ' 恢复）'
+    return { ok: true }
+  })
+  if (!out.ok) return out
+  diag('随录恢复：A' + out.seq)
+  const all = readIdeas(cfg)
+  return {
+    ok: true,
+    seq: out.seq,
+    ideas: all.filter((x) => !x.status || /想法|讨论中/.test(x.status)),
+    archive: readArchive(cfg),
+  }
+}
+
 // ── 心情的按天统计（曲线 + 今天 vs 昨天）────────────────────────────
 function moodDayStats(s) {
   const hist = Array.isArray(s && s.hist) ? s.hist : []
@@ -2666,6 +2693,41 @@ ctx.effect(() => ctx.webServer.register({
       },
     }))
   } catch (e) { diag('注册 /dsh-room/idea/decide 失败：' + (e && e.message)) }
+
+  // 恢复被舍弃的随录
+  try {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: '/dsh-room/idea/restore',
+      handler: async (req, res) => {
+        if (!allowed(req, res)) return
+        const send = (code, obj) => {
+          try {
+            res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+            res.end(JSON.stringify(obj))
+          } catch { /* ignore */ }
+        }
+        if (req.method !== 'POST') return send(405, { ok: false, error: '只收 POST' })
+        const chunks = []
+        let size = 0
+        try {
+          for await (const c of req) {
+            chunks.push(c)
+            size += c.length
+            if (size > 4096) { send(413, { ok: false, error: '太大了' }); req.destroy(); return }
+          }
+        } catch (e) { return send(400, { ok: false, error: '读不到请求体' }) }
+        let j = null
+        try { j = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') } catch (e) {
+          return send(400, { ok: false, error: '不是合法 JSON' })
+        }
+        const r = restoreIdea(readConfig(), j && j.seq)
+        if (r.ok) { stateCache.at = 0; stateCache.body = '' }
+        send(r.ok ? 200 : 400, r)
+      },
+    }))
+  } catch (e) { diag('注册 /dsh-room/idea/restore 失败：' + (e && e.message)) }
+
 
   // ── POST /dsh-room/budget：设月预算上限 ──
   try {
