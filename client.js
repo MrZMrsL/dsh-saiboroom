@@ -1189,7 +1189,7 @@ window.__ModuleLoader__.load({
                 h(Card, {
           id: 'archive',
           title: '最近处理过',
-          sub: '已采纳 / 已转待办 / 已舍弃',
+          sub: '已采纳 / 已转待办 / 已舍弃 · 不进检索',
           tone: 'violet',
           summary: archList && archList.length ? archList.length + ' 条' : '暂时没有',
         },
@@ -1206,7 +1206,7 @@ window.__ModuleLoader__.load({
                     }, '恢复')
                   : null)))
             : h('p', { className: 'dshrm-empty' }, '还没有处理过的条目。'),
-          h('p', { className: 'dshrm-note' }, '只留最近 30 天的 5 条；「舍弃」的点一下就放回随录，能重新决定。更早的没删，还在 30-想法池.md 里，用下面的记忆检索翻。')),
+          h('p', { className: 'dshrm-note' }, '处理过的整块搬进 笔记/31-想法-归档.md：不在随录里、检索也翻不到（等于忘掉），但一条没删；「舍弃」的点一下就搬回随录。')),
 
 h(Card, { title: '记忆检索', sub: '从笔记和记忆里翻旧账 · 本机索引', tone: 'magenta' },
           h('div', { className: 'dshrm-search' },

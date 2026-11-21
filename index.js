@@ -1042,13 +1042,74 @@ function ideaFilePath(cfg) {
   return join(cfg.workspace, '笔记', '30-想法池.md')
 }
 
+// 处置过的条目搬去这里：不进检索、不参与判重、不在随录里——
+// 等于「忘掉」，但整块原样留着，舍弃的能从面板一键搬回来。
+function ideaArchivePath(cfg) {
+  return join(cfg.workspace, '笔记', '31-想法-归档.md')
+}
+
+const IDEA_ARCHIVE_HEAD = '# 想法归档\n\n> 随录用过的（已采纳 / 已转待办 / 舍弃）。不进检索、不影响判断；舍弃的能从面板恢复。\n\n'
+
+function readOrEmpty(p) {
+  try { return readFileSync(p, 'utf8') } catch { return '' }
+}
+
+// 找某个条目的行区间。同号有多块时（历史数据撞过号）全部返回，由调用方挑。
+function blockRanges(lines, seq) {
+  const n = Number(String(seq == null ? '' : seq).replace(/^[AI]\s*/i, ''))
+  if (!Number.isInteger(n) || n <= 0) return []
+  const heads = []
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^###\s*(?:A|I)?(\d+)\s*[·.\-]/)
+    if (m) heads.push({ at: i, n: Number(m[1]) })
+  }
+  const out = []
+  for (let k = 0; k < heads.length; k++) {
+    if (heads[k].n !== n) continue
+    const end = k + 1 < heads.length ? heads[k + 1].at : lines.length
+    out.push([heads[k].at, end])
+  }
+  return out
+}
+
+function blockRange(lines, seq, pick) {
+  const cands = blockRanges(lines, seq)
+  if (!cands.length) return null
+  if (typeof pick === 'function') {
+    for (const r of cands) {
+      if (pick(lines.slice(r[0], r[1]))) return r
+    }
+  }
+  return cands[0]
+}
+
+// 把整块从一个文件搬到另一个文件（edit 可以就地把块里的行改掉）
+function moveBlock(fromPath, toPath, seq, edit, pick) {
+  const fromLines = readOrEmpty(fromPath).split(/\r?\n/)
+  const r = blockRange(fromLines, seq, pick)
+  if (!r) return { ok: false, error: '没找到 A' + String(seq == null ? '' : seq).replace(/^[AI]\s*/i, '') }
+  const [s, e] = r
+  const block = fromLines.slice(s, e).map((x) => String(x))
+  while (block.length && !block[block.length - 1].trim()) block.pop()
+  const res = edit ? edit(block) : { ok: true }
+  if (!res || !res.ok) return res || { ok: false, error: '没改成' }
+  const rest = fromLines.slice(0, s).concat(fromLines.slice(e))
+  writeFileSync(fromPath, rest.join('\n').replace(/\n{3,}$/, '\n'), 'utf8')
+  let toTxt = readOrEmpty(toPath)
+  if (!toTxt.trim()) toTxt = /想法-归档/.test(toPath) ? IDEA_ARCHIVE_HEAD : '# 想法池\n\n'
+  if (!toTxt.endsWith('\n')) toTxt += '\n'
+  toTxt += block.join('\n') + '\n\n'
+  writeFileSync(toPath, toTxt, 'utf8')
+  return { ok: true, seq: Number(String(seq).replace(/^[AI]\s*/i, '')) }
+}
+
 // 只看最近的终态条目：已采纳 / 已转待办 / 舍弃。超过 days 天不再展示（文件里仍留着，可检索）
 function readArchive(cfg, days, max) {
   const D = Number.isFinite(days) ? days : 30
   const M = Number.isFinite(max) ? max : 5
   if (!cfg || !cfg.workspace) return []
   let txt = ''
-  try { txt = readFileSync(ideaFilePath(cfg), 'utf8') } catch { return [] }
+  try { txt = readFileSync(ideaArchivePath(cfg), 'utf8') } catch { return [] }
   const now = Date.now()
   const out = []
   let cur = null
@@ -1184,11 +1245,15 @@ function decideIdea(cfg, seq, action) {
   body = body.replace(/\s+/g, ' ').trim().slice(0, 140)
   const today = localDateStr(Date.now())
   const stamp = { keep: '已采纳', todo: '已转待办', drop: '舍弃' }[act] + '（' + today + '）'
-  let statusLine = -1
-  for (let i = head + 1; i < end; i++) { if (/^\s*-\s*\*\*状态\*\*/.test(lines[i])) { statusLine = i; break } }
-  if (statusLine >= 0) lines[statusLine] = '- **状态**：' + stamp
-  else lines.splice(head + 1, 0, '- **状态**：' + stamp)
-  try { writeFileSync(p, lines.join('\n'), 'utf8') } catch (e) { return { ok: false, error: '写不进想法池：' + (e && e.message) } }
+  // 处置完就整块搬去归档：随录里不再留着、检索也翻不到（等于忘掉），但原样留着，舍弃的能搬回来
+  const mv = moveBlock(p, ideaArchivePath(cfg), n, (block) => {
+    let sl = -1
+    for (let i = 1; i < block.length; i++) { if (/^\s*-\s*\*\*状态\*\*/.test(block[i])) { sl = i; break } }
+    if (sl >= 0) block[sl] = '- **状态**：' + stamp
+    else block.splice(1, 0, '- **状态**：' + stamp)
+    return { ok: true }
+  })
+  if (!mv.ok) return mv
   // 副作用
   if (act === 'todo' && body) {
     const tp = join(cfg.workspace, '笔记', '40-待办.md')
@@ -1205,7 +1270,7 @@ function decideIdea(cfg, seq, action) {
     } catch (e) { diag('随录进记忆失败：' + (e && e.message)) }
   }
   diag('随录处置：A' + n + ' → ' + act)
-  return { ok: true, seq: n, action: act, ideas: readIdeas(cfg) }
+  return { ok: true, seq: n, action: act, ideas: readIdeas(cfg), archive: readArchive(cfg) }
 }
 
 // 恢复：只对「舍弃」的开放。改回「想法（date 恢复）」后，随录里会重新出现，
@@ -1213,17 +1278,17 @@ function decideIdea(cfg, seq, action) {
 // 它们各自有更该去的地方，硬改回来会出现同一件事两处都在的情况。
 function restoreIdea(cfg, seq) {
   if (!cfg || !cfg.workspace) return { ok: false, error: '没有工作区' }
-  const out = mutateIdeaBlock(cfg, seq, (lines, start, end) => {
+  const out = moveBlock(ideaArchivePath(cfg), ideaFilePath(cfg), seq, (block) => {
     let sl = -1
-    for (let i = start + 1; i < end; i++) { if (/^\s*-\s*\*\*状态\*\*/.test(lines[i])) { sl = i; break } }
-    const cur = sl >= 0 ? String(lines[sl]).replace(/^\s*-\s*\*\*状态\*\*[:：]\s*/, '').trim() : ''
+    for (let i = 1; i < block.length; i++) { if (/^\s*-\s*\*\*状态\*\*/.test(block[i])) { sl = i; break } }
+    const cur = sl >= 0 ? String(block[sl]).replace(/^\s*-\s*\*\*状态\*\*[:：]\s*/, '').trim() : ''
     if (!cur) return { ok: false, error: '这条没有状态，本来就在随录里' }
     if (/^已转待办/.test(cur)) return { ok: false, error: '这条已经转成待办了，去待办卡里把它取消就能退回随录' }
     if (/^已采纳/.test(cur)) return { ok: false, error: '这条已经进了记忆待确认队列，去记忆 Tab 里撤更稳妥' }
     if (!/^舍弃/.test(cur)) return { ok: false, error: '只有「舍弃」的能恢复' }
-    lines[sl] = '- **状态**：想法（' + localDateStr(Date.now()) + ' 恢复）'
+    block[sl] = '- **状态**：想法（' + localDateStr(Date.now()) + ' 恢复）'
     return { ok: true }
-  })
+  }, (block) => block.some((x) => /^\s*-\s*\*\*状态\*\*[:：]\s*舍弃/.test(String(x))))
   if (!out.ok) return out
   diag('随录恢复：A' + out.seq)
   const all = readIdeas(cfg)
@@ -1326,6 +1391,10 @@ function addIdea(cfg, text) {
   try {
     const nums = [...cur.matchAll(/^###\s*(?:A|I)?\s*(\d+)/gm)].map((m) => Number(m[1])).filter((n) => Number.isFinite(n))
     if (nums.length) next = Math.max(...nums) + 1
+    // 归档里的号也算：处置过的条目号被搬走了，只数想法池会重头编号、跟归档撞号
+    const arch = readOrEmpty(ideaArchivePath(cfg))
+    const an = [...arch.matchAll(/^###\s*(?:A|I)?\s*(\d+)/gm)].map((m) => Number(m[1])).filter((n) => Number.isFinite(n))
+    if (an.length) next = Math.max(next, Math.max(...an) + 1)
   } catch { /* ignore */ }
   const short = [...body].slice(0, 16).join('')
   const block = '### A' + next + ' · ' + short + '（想法）\n' +
@@ -1550,7 +1619,11 @@ function walkMd(dir, out, depth) {
     if (!nm || nm[0] === '.' || nm === 'node_modules') continue
     const p = join(dir, nm)
     if (ent.isDirectory()) walkMd(p, out, (depth | 0) + 1)
-    else if (/\.md$/i.test(nm)) out.push(p)
+    else if (/\.md$/i.test(nm)) {
+      // 想法归档不进检索索引：舍弃过的东西要真的忘掉，不能被搜出来
+      if (/想法-归档/.test(nm)) continue
+      out.push(p)
+    }
   }
 }
 
